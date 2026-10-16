@@ -5,7 +5,6 @@ import time
 
 import librosa
 import numpy as np
-import sounddevice as sd
 import soundfile as sf
 from kokoro import KPipeline
 from rich.progress import (
@@ -330,6 +329,9 @@ class TTSPlayer:
                 console.print("[green]Playback complete.[/]\n")
         except Exception as e:
             console.print(f"[dim]Playback thread error: {e}[/dim]")
+        finally:
+            if self.audio_player is not None:
+                self.audio_player.schedule_close()
 
     def skip_sentence(self) -> None:
         self.skip.set()
@@ -400,14 +402,43 @@ class TTSPlayer:
                 sys.exit()
 
 
+# Seconds to keep the output device open after playback ends, so back-to-back
+# texts don't reopen it.
+IDLE_CLOSE_DELAY = 2.0
+
+
 class AudioPlayer:
-    def __init__(self, samplerate):
+    """Plays audio clips through a PortAudio stream that is only open while needed.
+
+    sounddevice is imported lazily and PortAudio is terminated once playback has
+    been idle for ``idle_delay`` seconds, so an idle daemon holds no audio device
+    (under pipewire-jack, an initialized PortAudio keeps a JACK client alive).
+    """
+
+    def __init__(self, samplerate, idle_delay=IDLE_CLOSE_DELAY):
         self.samplerate = samplerate
+        self.idle_delay = idle_delay
         self.current_frame = 0
         self.playing = True
         self.event = threading.Event()
+        # Guards playback state; taken by the PortAudio callback.
         self.lock = threading.Lock()
+        # Serializes opening/closing the stream. Never hold self.lock while
+        # stopping the stream: stop() waits for the callback, which takes self.lock.
+        self.stream_lock = threading.Lock()
         self.current_audio = None
+        self.stream = None
+        self._idle_timer = None
+        self._idle_token = 0
+
+    def _open_stream(self) -> None:
+        """Initialize PortAudio and start the stream if needed (stream_lock held)."""
+        if self.stream is not None:
+            return
+        import sounddevice as sd
+
+        if not sd._initialized:
+            sd._initialize()
         self.stream = sd.OutputStream(
             samplerate=self.samplerate,
             channels=2,
@@ -415,6 +446,56 @@ class AudioPlayer:
             finished_callback=self._finished_callback,
         )
         self.stream.start()
+
+    def _close_stream(self) -> None:
+        """Close the stream and shut PortAudio down (stream_lock held)."""
+        if self.stream is None:
+            return
+        import sounddevice as sd
+
+        stream, self.stream = self.stream, None
+        try:
+            stream.stop()
+            stream.close()
+        finally:
+            if sd._initialized:
+                sd._terminate()
+
+    def _cancel_idle_close(self) -> None:
+        """Invalidate any pending idle close (stream_lock held)."""
+        self._idle_token += 1
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None
+
+    def schedule_close(self) -> None:
+        """Release the audio device after idle_delay seconds unless playback resumes."""
+        with self.stream_lock:
+            self._cancel_idle_close()
+            if self.stream is None:
+                return
+            token = self._idle_token
+            self._idle_timer = threading.Timer(
+                self.idle_delay, self._close_if_idle, args=(token,)
+            )
+            self._idle_timer.daemon = True
+            self._idle_timer.start()
+
+    def _close_if_idle(self, token) -> None:
+        with self.stream_lock:
+            if token != self._idle_token:
+                return
+            self._idle_timer = None
+            with self.lock:
+                if self.current_audio is not None:
+                    return
+            self._close_stream()
+
+    def close(self) -> None:
+        """Release the audio device now."""
+        with self.stream_lock:
+            self._cancel_idle_close()
+            self._close_stream()
 
     def _callback(self, outdata, frames, time, status):
         with self.lock:
@@ -450,10 +531,13 @@ class AudioPlayer:
 
     def play(self, audio, blocking=False) -> None:
         """Start playback of a single audio clip"""
-        with self.lock:
-            self.current_audio = audio
-            self.current_frame = 0
-            self.playing = True
+        with self.stream_lock:
+            self._cancel_idle_close()
+            self._open_stream()
+            with self.lock:
+                self.current_audio = audio
+                self.current_frame = 0
+                self.playing = True
 
         if blocking:
             self.event.clear()
@@ -485,6 +569,7 @@ class AudioPlayer:
 
     def __del__(self):
         """Cleanup when object is destroyed"""
-        if hasattr(self, "stream"):
-            self.stream.stop()
-            self.stream.close()
+        try:
+            self.close()
+        except Exception:
+            pass
