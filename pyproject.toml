@@ -88,3 +88,20 @@ only-include = ["src"]
 
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Kokoro is loaded behind a spinner before the remaining imports
+"src/run.py" = ["E402"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -3,7 +3,6 @@ import sys
 import threading
 import time
 import warnings
-from typing import Optional
 
 from config import (
     DEFAULT_LANGUAGE,
@@ -11,12 +10,10 @@ from config import (
     DEFAULT_VOICE,
     HOST,
     MAX_SPEED,
-    TIMEOUT,
     MIN_SPEED,
-    PORT,
     PROMPT,
     REPO_ID,
-    SAMPLE_RATE,
+    TIMEOUT,
     console,
 )
 
@@ -64,6 +61,7 @@ from utils import (
 )
 
 running_threads = 1
+
 
 def start(args: Args) -> None:
     """Initialize and run"""
@@ -193,7 +191,7 @@ def run_daemon(
     language: str,
     voice: str,
     speed: float,
-    device: Optional[str],
+    device: str | None,
     verbose: bool,
     port: int,
     image_reader: easyocr.Reader,
@@ -382,10 +380,15 @@ def run_with_all(
         if threading.active_count() > running_threads:
             player.stop_playback(False)
             start_time = time.time()
-            while threading.active_count() > running_threads and (time.time() - start_time) < TIMEOUT:
+            while (
+                threading.active_count() > running_threads
+                and (time.time() - start_time) < TIMEOUT
+            ):
                 time.sleep(0.1)
             if threading.active_count() > running_threads:
-                console.print("[red]Warning: Threads still active after timeout, proceeding anyway.[/]")
+                console.print(
+                    "[red]Warning: Threads still active after timeout, proceeding anyway.[/]"
+                )
                 running_threads += 1
         sys.exit()
 
@@ -397,7 +400,7 @@ def run_cli(
     speed: float,
     verbose: bool,
     input_text: str,
-    output_file: Optional[str],
+    output_file: str | None,
 ) -> None:
     """Generate audio"""
     player = TTSPlayer(pipeline, language, voice, speed, verbose)
@@ -414,10 +417,15 @@ def run_cli(
             if threading.active_count() > running_threads:
                 player.stop_playback(False)
                 start_time = time.time()
-                while threading.active_count() > running_threads and (time.time() - start_time) < TIMEOUT:
+                while (
+                    threading.active_count() > running_threads
+                    and (time.time() - start_time) < TIMEOUT
+                ):
                     time.sleep(0.1)
                 if threading.active_count() > running_threads:
-                    console.print("[red]Warning: Threads still active after timeout, proceeding anyway.[/]")
+                    console.print(
+                        "[red]Warning: Threads still active after timeout, proceeding anyway.[/]"
+                    )
                     running_threads += 1
             sys.exit()
     else:
@@ -431,14 +439,14 @@ def run_srt_cli(
     speed: float,
     verbose: bool,
     srt_file: str,
-    output_file: Optional[str],
+    output_file: str | None,
 ) -> None:
     """Generate timed audio from SRT file"""
     player = TTSPlayer(pipeline, language, voice, speed, verbose)
-    
+
     if output_file is None:
         output_file = "srt_output.wav"
-    
+
     try:
         console.print(f"[cyan]Processing SRT file:[/] {srt_file}")
         player.generate_srt_timed_audio(srt_file, output_file=output_file)
@@ -458,7 +466,7 @@ def run_console(
     speed: float,
     verbose: bool,
     history_off: bool,
-    device: Optional[str],
+    device: str | None,
     ctrlc: bool,
     prompt="> ",
 ) -> None:
@@ -547,10 +555,15 @@ def run_console(
                     if threading.active_count() > running_threads:
                         player.stop_playback(False)
                         start_time = time.time()
-                        while threading.active_count() > running_threads and (time.time() - start_time) < TIMEOUT:
+                        while (
+                            threading.active_count() > running_threads
+                            and (time.time() - start_time) < TIMEOUT
+                        ):
                             time.sleep(0.1)
                         if threading.active_count() > running_threads:
-                            console.print("[red]Warning: Threads still active after timeout, proceeding anyway.[/]")
+                            console.print(
+                                "[red]Warning: Threads still active after timeout, proceeding anyway.[/]"
+                            )
                             running_threads += 1
                     break
 
@@ -582,10 +595,15 @@ def run_console(
             if threading.active_count() > running_threads:
                 player.stop_playback(False)
                 start_time = time.time()
-                while threading.active_count() > running_threads and (time.time() - start_time) < TIMEOUT:
+                while (
+                    threading.active_count() > running_threads
+                    and (time.time() - start_time) < TIMEOUT
+                ):
                     time.sleep(0.1)
                 if threading.active_count() > running_threads:
-                    console.print("[red]Warning: Threads still active after timeout, proceeding anyway.[/]")
+                    console.print(
+                        "[red]Warning: Threads still active after timeout, proceeding anyway.[/]"
+                    )
                     running_threads += 1
 
             sentences = split_text_to_sentences(user_input, player.nltk_language)

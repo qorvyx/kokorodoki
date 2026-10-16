@@ -2,13 +2,11 @@ import queue
 import sys
 import threading
 import time
-from typing import Optional
 
 import librosa
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
-import torch
 from kokoro import KPipeline
 from rich.progress import (
     BarColumn,
@@ -19,7 +17,13 @@ from rich.progress import (
 )
 
 from config import MAX_SPEED, MIN_SPEED, REPO_ID, SAMPLE_RATE, console
-from utils import get_language_map, get_nltk_language, get_voices, parse_srt_file, split_text_to_sentences
+from utils import (
+    get_language_map,
+    get_nltk_language,
+    get_voices,
+    parse_srt_file,
+    split_text_to_sentences,
+)
 
 
 class TTSPlayer:
@@ -52,7 +56,7 @@ class TTSPlayer:
         self.ctrlc = not ctrlc
         self.print_complete = True
 
-    def change_language(self, new_lang: str, device: Optional[str]) -> bool:
+    def change_language(self, new_lang: str, device: str | None) -> bool:
         """Change the language and reinitialize the pipeline."""
         if new_lang in self.languages:
             self.language = new_lang
@@ -135,7 +139,6 @@ class TTSPlayer:
                 BarColumn(pulse_style="yellow", complete_style="blue"),
                 TimeElapsedColumn(),
             ) as progress:
-
                 task = progress.add_task(
                     f"[bold yellow]Generating {output_file}",
                     total=None,
@@ -185,28 +188,30 @@ class TTSPlayer:
                 BarColumn(pulse_style="yellow", complete_style="blue"),
                 TimeElapsedColumn(),
             ) as progress:
-
                 task = progress.add_task(
-                    f"[bold yellow]Generating timed audio from SRT",
+                    "[bold yellow]Generating timed audio from SRT",
                     total=len(srt_entries),
                 )
 
                 # Calculate total duration needed
                 total_duration = max(entry.end_time for entry in srt_entries)
                 total_samples = int(total_duration * SAMPLE_RATE)
-                
+
                 # Initialize stereo audio array with silence
                 full_audio = np.zeros((total_samples, 2))
 
-                for i, entry in enumerate(srt_entries):
+                for entry in srt_entries:
                     # Split text into sentences for better processing
                     sentences = split_text_to_sentences(entry.text, self.nltk_language)
-                    
+
                     # Generate audio for this entry
                     entry_audio_chunks = []
                     for sentence in sentences:
                         generator = self.pipeline(
-                            sentence, voice=self.voice, speed=self.speed, split_pattern=None
+                            sentence,
+                            voice=self.voice,
+                            speed=self.speed,
+                            split_pattern=None,
                         )
 
                         for result in generator:
@@ -219,25 +224,25 @@ class TTSPlayer:
                     if entry_audio_chunks:
                         # Concatenate all audio for this entry
                         entry_audio = np.concatenate(entry_audio_chunks, axis=0)
-                        
+
                         # Calculate timing
                         start_sample = int(entry.start_time * SAMPLE_RATE)
                         entry_duration = entry.end_time - entry.start_time
                         target_samples = int(entry_duration * SAMPLE_RATE)
-                        
+
                         # Ensure we don't exceed the target duration
                         if len(entry_audio) > target_samples:
                             # If audio is too long, truncate it
                             entry_audio = entry_audio[:target_samples]
-                        
+
                         # Calculate end sample
                         end_sample = start_sample + len(entry_audio)
-                        
+
                         # Make sure we don't exceed the total audio length
                         if end_sample > len(full_audio):
                             end_sample = len(full_audio)
-                            entry_audio = entry_audio[:end_sample - start_sample]
-                        
+                            entry_audio = entry_audio[: end_sample - start_sample]
+
                         # Place audio at the correct timing
                         if start_sample < len(full_audio):
                             full_audio[start_sample:end_sample] = entry_audio

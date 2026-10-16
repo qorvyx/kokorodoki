@@ -4,7 +4,6 @@ import signal
 import threading
 import tkinter as tk
 from tkinter import messagebox
-from typing import Dict, Optional
 
 import easyocr
 import ttkbootstrap as ttk
@@ -18,7 +17,6 @@ from utils import (
     get_gui_themes,
     get_language_map,
     get_nltk_language,
-    get_nltk_language_map,
     get_voices,
     split_text_to_sentences,
 )
@@ -32,7 +30,7 @@ class Gui:
         language: str,
         voice: str,
         speed: float,
-        device: Optional[str],
+        device: str | None,
         image_reader: easyocr.Reader,
         dark_theme: bool,
     ):
@@ -363,7 +361,7 @@ class Gui:
                             image_text,
                         )
                     else:
-                        with open(file_path, "r", encoding="utf-8") as file:
+                        with open(file_path, encoding="utf-8") as file:
                             self.text_area.delete(1.0, tk.END)
                             self.text_area.insert(tk.END, file.read())
                 except Exception as e:
@@ -627,7 +625,7 @@ def run_gui(
     language: str,
     voice: str,
     speed: float,
-    device: Optional[str],
+    device: str | None,
     theme: int,
     image_reader: easyocr.Reader,
 ) -> None:

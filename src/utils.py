@@ -2,8 +2,6 @@ import os
 import platform
 import re
 from dataclasses import dataclass
-from datetime import timedelta
-from typing import Dict, List, Optional
 
 if platform.system() == "Windows":
     import pyreadline3 as readline
@@ -17,7 +15,7 @@ from rich.table import Table
 from config import COMMANDS, HISTORY_FILE, HISTORY_LIMIT, console
 
 
-def get_language_map() -> Dict[str, str]:
+def get_language_map() -> dict[str, str]:
     """Return the available languages"""
     return {
         "a": "American English",
@@ -32,7 +30,7 @@ def get_language_map() -> Dict[str, str]:
     }
 
 
-def get_easyocr_language_map() -> Dict[str, str]:
+def get_easyocr_language_map() -> dict[str, str]:
     """Return the available languages for EasyOCR"""
     return {
         "a": "en",
@@ -47,7 +45,7 @@ def get_easyocr_language_map() -> Dict[str, str]:
     }
 
 
-def get_voices() -> List[str]:
+def get_voices() -> list[str]:
     """Return the available voices"""
     return [
         "af_alloy",
@@ -107,7 +105,7 @@ def get_voices() -> List[str]:
     ]
 
 
-def get_gui_themes() -> Dict[int, str]:
+def get_gui_themes() -> dict[int, str]:
     """Return the available gui themes"""
     return {
         # Dark themes
@@ -136,7 +134,7 @@ def display_themes() -> None:
     console.print(table)
 
 
-def get_nltk_language_map() -> Dict[str, str]:
+def get_nltk_language_map() -> dict[str, str]:
     """Return available languages in nltk"""
     return {
         "a": "english",
@@ -301,7 +299,7 @@ def clear_history() -> None:
     if platform.system() != "Windows":
         try:
             readline.write_history_file(HISTORY_FILE)
-        except IOError:
+        except OSError:
             pass
     console.print("[bold yellow]History cleared.[/]")
 
@@ -312,7 +310,7 @@ def save_history(history_off: bool) -> None:
     if not history_off:
         try:
             readline.write_history_file(HISTORY_FILE)
-        except IOError:
+        except OSError:
             console.print("[bold red]Error saving history file.[/]")
 
 
@@ -324,7 +322,7 @@ def init_history(history_off: bool) -> None:
         if os.path.exists(HISTORY_FILE):
             try:
                 readline.read_history_file(HISTORY_FILE)
-            except IOError:
+            except OSError:
                 pass
         readline.set_history_length(HISTORY_LIMIT)
 
@@ -338,7 +336,7 @@ def init_completer() -> None:
     readline.parse_and_bind("set completion-ignore-case on")
 
 
-def completer(text: str, state: int) -> Optional[str]:
+def completer(text: str, state: int) -> str | None:
     """Auto-complete function for readline."""
     if platform.system() == "Windows":
         return None
@@ -346,7 +344,7 @@ def completer(text: str, state: int) -> Optional[str]:
     return options[state] if state < len(options) else None
 
 
-def split_by_words(chunk: str, max_len: int) -> List[str]:
+def split_by_words(chunk: str, max_len: int) -> list[str]:
     """Split a chunk into smaller chunks by words, ensuring each is <= max_len"""
 
     if len(chunk) <= max_len:
@@ -360,13 +358,11 @@ def split_by_words(chunk: str, max_len: int) -> List[str]:
         if len(current_chunk) + len(word) + (1 if current_chunk else 0) > max_len:
             if current_chunk:
                 chunks.append(current_chunk)
-                current_chunk = word
-            else:
-                # If word itself is too long
-                while len(word) > max_len:
-                    chunks.append(word[:max_len])
-                    word = word[max_len:]
-                current_chunk = word
+            # If word itself is too long
+            while len(word) > max_len:
+                chunks.append(word[:max_len])
+                word = word[max_len:]
+            current_chunk = word
         else:
             current_chunk += (" " if current_chunk else "") + word
     if current_chunk:
@@ -375,7 +371,7 @@ def split_by_words(chunk: str, max_len: int) -> List[str]:
     return chunks
 
 
-def split_long_sentence(sentence: str, max_len=350, min_len=50) -> List[str]:
+def split_long_sentence(sentence: str, max_len=350, min_len=50) -> list[str]:
     """Split a sentence into chunks of <= max_len"""
     if len(sentence) <= max_len:
         return [sentence]
@@ -436,7 +432,7 @@ def merge_short_sentences(sentences: list[str], min_len=50, max_len=300) -> list
     return result
 
 
-def split_text_to_sentences(text: str, language: str) -> List[str]:
+def split_text_to_sentences(text: str, language: str) -> list[str]:
     """Tokenize text into sentences"""
     sentences = sent_tokenize(text, language=language)
 
@@ -454,59 +450,63 @@ def split_text_to_sentences(text: str, language: str) -> List[str]:
 @dataclass
 class SRTEntry:
     """Represents a single SRT subtitle entry"""
+
     index: int
     start_time: float  # in seconds
-    end_time: float    # in seconds
+    end_time: float  # in seconds
     text: str
 
 
 def parse_srt_timestamp(timestamp: str) -> float:
     """Parse SRT timestamp format (HH:MM:SS,mmm) to seconds"""
     # Replace comma with dot for milliseconds
-    timestamp = timestamp.replace(',', '.')
-    parts = timestamp.split(':')
+    timestamp = timestamp.replace(",", ".")
+    parts = timestamp.split(":")
     hours = int(parts[0])
     minutes = int(parts[1])
     seconds_ms = float(parts[2])
-    
+
     return hours * 3600 + minutes * 60 + seconds_ms
 
 
-def parse_srt_file(file_path: str) -> List[SRTEntry]:
+def parse_srt_file(file_path: str) -> list[SRTEntry]:
     """Parse an SRT subtitle file and return a list of SRTEntry objects"""
     entries = []
-    
-    with open(file_path, 'r', encoding='utf-8') as f:
+
+    with open(file_path, encoding="utf-8") as f:
         content = f.read().strip()
-    
+
     # Split by double newlines to separate entries
-    blocks = re.split(r'\n\s*\n', content)
-    
+    blocks = re.split(r"\n\s*\n", content)
+
     for block in blocks:
-        lines = block.strip().split('\n')
+        lines = block.strip().split("\n")
         if len(lines) < 3:
             continue
-            
+
         try:
             # Parse index
             index = int(lines[0])
-            
+
             # Parse timestamp line
             timestamp_line = lines[1]
-            timestamp_match = re.match(r'(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})', timestamp_line)
+            timestamp_match = re.match(
+                r"(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})",
+                timestamp_line,
+            )
             if not timestamp_match:
                 continue
-                
+
             start_time = parse_srt_timestamp(timestamp_match.group(1))
             end_time = parse_srt_timestamp(timestamp_match.group(2))
-            
+
             # Join text lines (in case subtitle spans multiple lines)
-            text = '\n'.join(lines[2:]).strip()
-            
+            text = "\n".join(lines[2:]).strip()
+
             entries.append(SRTEntry(index, start_time, end_time, text))
-            
+
         except (ValueError, IndexError):
             # Skip malformed entries
             continue
-    
+
     return entries

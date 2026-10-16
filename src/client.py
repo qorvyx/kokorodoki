@@ -5,7 +5,6 @@ import socket
 import subprocess
 import sys
 from enum import Enum
-from typing import Optional, Tuple
 
 if platform.system() == "Windows":
     import pyperclip
@@ -128,7 +127,7 @@ def read_x11_selection():
         return None
 
 
-def get_text(clipboard: bool) -> Optional[str | bytes]:
+def get_text(clipboard: bool) -> str | bytes | None:
     """Get selected text or clipboard content"""
 
     if platform.system() == "Windows":
@@ -149,6 +148,7 @@ def get_text(clipboard: bool) -> Optional[str | bytes]:
         if clipboard:
             return read_x11_clipboard()
         return read_x11_selection()
+
 
 def send_text(clipboard: bool) -> None:
     """Send selected text or clipboard content"""
@@ -190,9 +190,7 @@ def send_voice(voice: str) -> None:
         client_socket.sendall(f"!voice {voice}".encode())
 
 
-def parse_args() -> (
-    Tuple[Action, Optional[float], Optional[str], Optional[str], bool, bool]
-):
+def parse_args() -> tuple[Action, float | None, str | None, str | None, bool, bool]:
     """Parse command-line arguments"""
     parser = argparse.ArgumentParser(
         description="Interact with kokorodoki daemon",
@@ -326,9 +324,9 @@ def parse_args() -> (
 
 def send(
     action: Action,
-    speed: Optional[float],
-    language: Optional[str],
-    voice: Optional[str],
+    speed: float | None,
+    language: str | None,
+    voice: str | None,
     status: bool,
     clipboard: bool,
 ) -> None:

@@ -1,7 +1,6 @@
 import argparse
 import sys
 from dataclasses import dataclass
-from typing import Optional
 
 from config import (
     DEFAULT_LANGUAGE,
@@ -30,9 +29,9 @@ class Args:
     voice: str
     speed: float
     history_off: bool
-    device: Optional[str]
-    input_text: Optional[str]
-    output_file: Optional[str]
+    device: str | None
+    input_text: str | None
+    output_file: str | None
     all_voices: bool
     setup: bool
     daemon: bool
@@ -275,18 +274,18 @@ def parse_args() -> Args:
         if not args.file.strip():
             console.print("[bold red]Error:[/] File path cannot be empty")
             sys.exit(1)
-            
+
         # Check if it's an SRT file based on extension
-        is_srt_file = args.file.lower().endswith(('.srt', '.SRT'))
-        
+        is_srt_file = args.file.lower().endswith((".srt", ".SRT"))
+
         # Validate SRT files can't be used with --all
         if is_srt_file and args.all:
             console.print("[bold red]Error:[/] --all cannot be used with SRT files")
             sys.exit(1)
-        
+
         try:
             # Validate file exists and is readable
-            with open(args.file, "r", encoding="utf-8") as f:
+            with open(args.file, encoding="utf-8") as f:
                 if is_srt_file:
                     # Just validate SRT file is readable, don't load content
                     f.read()
