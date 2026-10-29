@@ -186,7 +186,7 @@ def parse_args() -> Args:
         "--theme",
         type=int,
         default=DEFAULT_THEME,
-        help=f"Choose a theme number (default: {get_gui_themes()[DEFAULT_THEME]}, use --themes to get list of themes)",
+        help=f"Gui theme: 1-4 dark, 5-7 light (default: {DEFAULT_THEME}, {get_gui_themes()[DEFAULT_THEME]}; use --themes to list them)",
     )
 
     args = parser.parse_args()

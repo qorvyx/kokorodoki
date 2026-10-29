@@ -16,7 +16,7 @@ from nltk import sent_tokenize
 from rich import box
 from rich.table import Table
 
-from config import COMMANDS, HISTORY_FILE, HISTORY_LIMIT, console
+from config import COMMANDS, HISTORY_FILE, HISTORY_LIMIT, IMAGE_EXTENSIONS, console
 
 
 def read_client_message(conn: socket.socket, timeout: float) -> bytes | None:
@@ -247,32 +247,67 @@ def get_default_voice(language: str, default: str) -> str:
 
 
 def get_gui_themes() -> dict[int, str]:
-    """Return the available gui themes"""
+    """Return the gui theme for each theme number, old numbers kept working"""
     return {
-        # Dark themes
-        1: "darkly",
-        2: "cyborg",
-        3: "solar",
-        4: "vapor",
-        # Light themes
-        5: "cosmo",
-        6: "pulse",
-        7: "morph",
+        1: "dark",
+        2: "dark",
+        3: "dark",
+        4: "dark",
+        5: "light",
+        6: "light",
+        7: "light",
     }
 
 
 def display_themes() -> None:
     """Display available gui themes"""
-    themes = get_gui_themes()
     table = Table(title="Available Themes", box=box.ROUNDED)
     table.add_column("Number", style="cyan")
     table.add_column("Theme", style="green")
-    table.add_column("Style", style="green")
 
-    for number, name in themes.items():
-        table.add_row(str(number), name, "Dark" if 1 <= number <= 4 else "Light")
+    table.add_row("1 (or 2-4)", "Dark")
+    table.add_row("5 (or 6-7)", "Light")
 
     console.print(table)
+
+
+def pick_font(available: list[str] | tuple[str, ...], preferred: list[str]) -> str:
+    """Return the first preferred font family that is installed, else the last one"""
+    installed = {family.lower(): family for family in available}
+    for family in preferred:
+        if family.lower() in installed:
+            return installed[family.lower()]
+    return preferred[-1]
+
+
+def has_text(text: str) -> bool:
+    """Whether the reading pane holds something to read"""
+    return bool(text.strip())
+
+
+def is_image_file(path: str) -> bool:
+    """Whether a path looks like an image to OCR"""
+    return os.path.splitext(path.lower())[1] in IMAGE_EXTENSIONS
+
+
+def sentence_progress(index: int | None, total: int) -> tuple[str, float]:
+    """Return the progress label and fraction for the sentence being read"""
+    if total <= 0:
+        return "", 0.0
+    if index is None:
+        return f"{total} sentence{'' if total == 1 else 's'}", 0.0
+    index = max(0, min(index, total - 1))
+    return f"Sentence {index + 1} of {total}", (index + 1) / total
+
+
+def format_speed(speed: float) -> str:
+    """Format a speed for the gui, e.g. 1.2×"""
+    return f"{round(speed, 2):g}×"
+
+
+def reading_padding(width: int, measure: int, minimum: int) -> int:
+    """Return the side padding that keeps the reading text near its measure"""
+    return max(minimum, (width - measure) // 2)
 
 
 def get_nltk_language_map() -> dict[str, str]:

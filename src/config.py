@@ -44,8 +44,13 @@ DEFAULT_MAX_MEMORY = 3000
 # Seconds the daemon waits for a client to send before dropping it.
 CLIENT_TIMEOUT = 5
 TITLE = "KokoroDoki"
-WINDOW_SIZE = "700x600"
+WINDOW_SIZE = "900x680"
+MIN_WINDOW_SIZE = (640, 480)
 VERSION = "v0.1.0"
 DEFAULT_THEME = 1
+# Installed fonts are picked at runtime, first match wins
+UI_FONTS = ["Inter", "Segoe UI", "Cantarell", "Noto Sans", "DejaVu Sans"]
+READING_FONTS = ["Noto Serif", "Georgia", "DejaVu Serif"]
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif")
 
 console = Console()

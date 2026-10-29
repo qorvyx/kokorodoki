@@ -11,15 +11,15 @@ dependencies = [
     "sounddevice==0.5.1",
     "soundfile==0.13.1",
     "rich==14.0.0",
-    "nltk==3.9.3",
+    "nltk==3.10.4",
     "librosa==0.11.0",
-    "ttkbootstrap==1.12.0",
+    "customtkinter==6.0.0",
     "easyocr==1.7.2",
     "ordered-set==4.1.0",
     "proces==0.1.7",
     "PyAutoGUI==0.9.54",
     "torch",
-    "torchvision"
+    "torchvision",
 ]
 
 [project.optional-dependencies]

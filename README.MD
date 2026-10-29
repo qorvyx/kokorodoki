@@ -64,7 +64,7 @@ https://github.com/user-attachments/assets/103b6bd0-0010-4c3d-a373-cf4b218a05a0
   An interactive terminal mode with commands to control playback, switch voices/languages, and more.
 
 * **🖥️ GUI Mode**
-  A GUI with support for multiple themes and sentence highlighting.
+  A GUI with dark and light themes, sentence highlighting and keyboard shortcuts.
 
 * **🛠️ Daemon**
   Runs as a background service. Accepts commands/text from client.py.
@@ -309,7 +309,7 @@ kokorodoki -f subtitles.srt -o timed_audio.wav
 * `--port` Set the port for daemon mode (default: `5600`).
   The default sits outside 5555–5585 on purpose: the Android `adb` server scans those odd ports for emulators and would hold the daemon's connection open.
 * `--max-memory` Daemon only: restart when idle and above this many MB, with the same settings (default: `3000` on CPU, `0` on GPU; `0` disables). Linux only.
-* `--theme` Set GUI theme (default: `darkly`).
+* `--theme` Set GUI theme: 1-4 dark, 5-7 light (default: dark).
 * `--history-off` Disable saving command history.
 * `--verbose`, `-V` Enable verbose output.
 * `--ctrl_c_off`, `-c` Disable Ctrl+C from stopping playback.
@@ -378,13 +378,9 @@ Launch a graphical interface.
 kokorodoki --gui
 ```
 
-Themes:
-1. darkly
-2. cyborg
-3. solar
-4. vapor
+Themes: `--theme 1` (dark, default) or `--theme 5` (light). Older numbers still work: 1-4 open dark, 5-7 open light. The ☀/☾ button switches at runtime.
 
-Use `--theme <number>` to set it.
+Shortcuts: `Space` play/pause, `←`/`→` back/next sentence, `Ctrl+O` open a file. While typing in the text, press `Esc` first.
 
 
 ### 3/4. 🛠️ Daemon Mode (Background Service)
@@ -523,7 +519,7 @@ kokorodoki -f subtitles.srt -l a -v af_heart -o output.wav
 * `torch`, `numpy`, `librosa` – Audio processing
 * `sounddevice`, `soundfile` – Audio playback
 * [`kokoro`](https://huggingface.co/hexgrad/Kokoro-82M) – The TTS model
-* `tkinter`, `ttkbootstrap` – GUI theming
+* `tkinter`, `customtkinter` – GUI
 * `rich` – Fancy CLI output
 * `socket` - For Daemon and Client communication
 
