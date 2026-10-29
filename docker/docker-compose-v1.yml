@@ -27,7 +27,12 @@ services:
   kdoki_daemon:
     <<: *kdoki-base
     ports:
-      - "6155:5561"
+      - "6155:5600"
+    environment:
+      - PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
+      - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
+      # The port is published, so listen beyond the container's loopback.
+      - KOKORODOKI_HOST=0.0.0.0
     command: ["--daemon"]
 
   kdoki_gui:

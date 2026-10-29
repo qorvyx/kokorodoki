@@ -3,9 +3,8 @@ import queue
 import signal
 import threading
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
-import easyocr
 import ttkbootstrap as ttk
 from kokoro import KPipeline
 from ttkbootstrap.tooltip import ToolTip
@@ -13,7 +12,7 @@ from ttkbootstrap.tooltip import ToolTip
 from config import MAX_SPEED, MIN_SPEED, TITLE, VERSION, WINDOW_SIZE
 from models import TTSPlayer
 from utils import (
-    get_easyocr_language_map,
+    OcrReader,
     get_gui_themes,
     get_language_map,
     get_nltk_language,
@@ -31,7 +30,6 @@ class Gui:
         voice: str,
         speed: float,
         device: str | None,
-        image_reader: easyocr.Reader,
         dark_theme: bool,
     ):
         self.root = root
@@ -45,16 +43,22 @@ class Gui:
         self.device = device
         self.pipeline = pipeline
         self.player = TTSPlayer(
-            self.pipeline, self.current_language, self.current_voice, self.speed, False
+            self.pipeline,
+            self.current_language_code,
+            self.current_voice,
+            self.speed,
+            False,
         )
         self.current_thread = None
+        # Bumped on each play, so a playback still waiting for the old one can tell it was replaced
+        self.play_token = 0
         self.speech_paused = False
         self.prev_text = ""
         self.prev_sentences = []
         self.nltk_language = get_nltk_language(self.current_language_code)
         self.sentence_indices = []
 
-        self.reader = image_reader
+        self.reader = OcrReader(language)
 
         self.queue = queue.Queue()
         self.root.after(100, self.process_queue)
@@ -74,17 +78,20 @@ class Gui:
         )
 
     def process_queue(self) -> None:
-        try:
-            while True:
+        while True:
+            try:
                 item = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 if isinstance(item, tuple):
                     func, args = item
                     func(*args)
                 else:
-                    func = item
-                    func()
-        except queue.Empty:
-            pass
+                    item()
+            except Exception as e:
+                # Keep polling: later items re-enable the text area.
+                print(f"GUI update error: {e}")
         self.root.after(100, self.process_queue)
 
     def change_speed(self, event) -> None:
@@ -102,60 +109,122 @@ class Gui:
         self.status_label.config(text=f"Voice set to: {self.current_voice}")
 
     def change_lang(self, event, voice_menu: ttk.Combobox) -> None:
-        """Change language and update voice menu"""
-        self.current_language = self.lang_var.get()
-        self.current_language_code = next(
-            code
-            for code, lang in get_language_map().items()
-            if lang == self.current_language
+        """Change language, loading the models in a thread so the window stays responsive"""
+        lang_menu = event.widget
+        language = self.lang_var.get()
+        language_code = next(
+            code for code, lang in get_language_map().items() if lang == language
         )
-        self.player.change_language(self.current_language_code, self.device)
-        self.status_label.config(text=f"Language set to: {self.current_language}")
+        if language_code == self.current_language_code:
+            return
 
-        easyocr_lang = [
-            lang
-            for code, lang in get_easyocr_language_map().items()
-            if code == self.current_language_code
-        ]
-        self.reader = easyocr.Reader(easyocr_lang)
+        lang_menu.config(state="disabled")
+        voice_menu.config(state="disabled")
+        self.status_label.config(text=f"Loading {language}...")
+        threading.Thread(
+            target=self.load_language,
+            args=(language, language_code, lang_menu, voice_menu),
+            daemon=True,
+        ).start()
 
-        self.nltk_language = get_nltk_language(self.current_language_code)
+    def load_language(
+        self,
+        language: str,
+        language_code: str,
+        lang_menu: ttk.Combobox,
+        voice_menu: ttk.Combobox,
+    ) -> None:
+        """Load the pipeline for a language, the OCR model loads on first use"""
+        try:
+            self.player.change_language(language_code, self.device)
+            self.reader.set_language(language_code)
+        except Exception as e:
+            error = str(e)
+            self.queue.put(
+                lambda: self.language_failed(language, error, lang_menu, voice_menu)
+            )
+            return
+        self.queue.put(
+            lambda: self.language_loaded(language, language_code, lang_menu, voice_menu)
+        )
+
+    def language_loaded(
+        self,
+        language: str,
+        language_code: str,
+        lang_menu: ttk.Combobox,
+        voice_menu: ttk.Combobox,
+    ) -> None:
+        """Update the menus once the new language is loaded"""
+        self.current_language = language
+        self.current_language_code = language_code
+        self.nltk_language = get_nltk_language(language_code)
 
         # Update voice menu
-        if not self.current_voice.startswith(self.current_language_code):
-            voice_menu["values"] = [
-                voice
-                for voice in self.voices
-                if voice.startswith(self.current_language_code)
-            ]
-            self.voice_var.set(voice_menu["values"][0])
-            self.current_voice = self.voice_var.get()
+        voice_menu["values"] = [
+            voice for voice in self.voices if voice.startswith(language_code)
+        ]
+        self.voice_var.set(self.player.voice)
+        self.current_voice = self.player.voice
+
+        lang_menu.config(state="readonly")
+        voice_menu.config(state="readonly")
+        self.status_label.config(text=f"Language set to: {language}")
+
+    def language_failed(
+        self,
+        language: str,
+        error: str,
+        lang_menu: ttk.Combobox,
+        voice_menu: ttk.Combobox,
+    ) -> None:
+        """Go back to the current language after a failed load"""
+        self.lang_var.set(self.current_language)
+        lang_menu.config(state="readonly")
+        voice_menu.config(state="readonly")
+        self.status_label.config(text=f"Could not load {language}: {error}")
 
     def play_speech(self) -> None:
         """Play or resume if it was paused"""
         text = self.text_area.get("1.0", tk.END).strip()
 
-        if self.prev_text == text and self.speech_paused is True:
+        is_playing = self.current_thread is not None and self.current_thread.is_alive()
+        if self.prev_text == text and self.speech_paused and is_playing:
             self.speech_paused = False
             self.resume_speech()
         else:
+            self.speech_paused = False
             self.text_area.delete("1.0", tk.END)
             self.text_area.insert("1.0", text)
             self.prev_text = text
             self.prev_sentences = split_text_to_sentences(text, self.nltk_language)
-            if self.current_thread is not None and self.current_thread.is_alive():
+            # The new thread waits for the old one, so the window doesn't freeze
+            previous_thread = self.current_thread
+            if is_playing:
                 self.player.stop_playback()
-                self.current_thread.join()
+            self.play_token += 1
             self.current_thread = threading.Thread(
-                target=self.speak_thread, args=(self.prev_sentences,), daemon=True
+                target=self.speak_thread,
+                args=(self.prev_sentences, previous_thread, self.play_token),
+                daemon=True,
             )
             self.current_thread.start()
             self.calculate_sentence_indices()
             self.status_label.config(text="Playback: started")
 
-    def speak_thread(self, text: str) -> None:
+    def speak_thread(
+        self,
+        text: list[str],
+        previous_thread: threading.Thread | None,
+        token: int,
+    ) -> None:
         """Player speak wrapper"""
         try:
+            if previous_thread is not None:
+                previous_thread.join()
+            # Play was pressed again while waiting
+            if token != self.play_token:
+                return
             self.queue.put(
                 lambda: self.text_area.config(
                     state="disabled",
@@ -178,6 +247,8 @@ class Gui:
 
     def pause_speech(self) -> None:
         """Pause speech"""
+        if self.current_thread is None or not self.current_thread.is_alive():
+            return
         self.speech_paused = True
         self.text_area.config(
             state="normal",
@@ -219,6 +290,8 @@ class Gui:
         for sentence in self.prev_sentences:
             start_pos = text_content.find(sentence, current_pos)
             if start_pos == -1:
+                # Keep positions aligned with sentence numbers.
+                self.sentence_indices.append(None)
                 continue
 
             # Calculate line and column for start index
@@ -254,8 +327,12 @@ class Gui:
         if not self.sentence_indices:
             return
 
+        if not 0 <= sentence < len(self.sentence_indices):
+            return
+        indices = self.sentence_indices[sentence]
+        if indices is None:
+            return
         self.text_area.tag_remove("highlight", "1.0", tk.END)
-        indices = self.sentence_indices[sentence % len(self.prev_sentences)]
         self.text_area.tag_add("highlight", indices["start"], indices["end"])
         self.text_area.see(indices["start"])
 
@@ -330,7 +407,7 @@ class Gui:
 
     def choose_file(self):
         try:
-            file_path = tk.filedialog.askopenfilename(
+            file_path = filedialog.askopenfilename(
                 title="Select a Text file of an image",
                 filetypes=[("All files", "*.*"), ("Text files", "*.txt")],
             )
@@ -350,16 +427,10 @@ class Gui:
 
                     if file_ext in image_extensions:
                         self.text_area.delete(1.0, tk.END)
-                        results = self.reader.readtext(file_path)
-                        image_text = ""
-                        image_text = " ".join(
-                            text for _, text, _ in results if text
-                        ).strip()
-
-                        self.text_area.insert(
-                            tk.END,
-                            image_text,
-                        )
+                        self.status_label.config(text="Reading text from image...")
+                        threading.Thread(
+                            target=self.read_image, args=(file_path,), daemon=True
+                        ).start()
                     else:
                         with open(file_path, encoding="utf-8") as file:
                             self.text_area.delete(1.0, tk.END)
@@ -369,6 +440,23 @@ class Gui:
                     self.text_area.insert(tk.END, f"Error reading file: {str(e)}")
         except Exception as e:
             print(f"An error occurred: {e}")
+
+    def read_image(self, file_path: str) -> None:
+        """Read text from an image (OCR) outside the UI thread"""
+        try:
+            results = self.reader.readtext(file_path)
+            image_text = " ".join(text for _, text, _ in results if text).strip()
+            status = "Ready"
+        except Exception as e:
+            image_text = f"Error reading file: {str(e)}"
+            status = "Could not read the image"
+        self.queue.put((self.show_image_text, (image_text, status)))
+
+    def show_image_text(self, image_text: str, status: str) -> None:
+        """Put the text read from an image in the text area"""
+        self.text_area.delete(1.0, tk.END)
+        self.text_area.insert(tk.END, image_text)
+        self.status_label.config(text=status)
 
     def add_text_area(self, container):
         """Create text area"""
@@ -627,7 +715,6 @@ def run_gui(
     speed: float,
     device: str | None,
     theme: int,
-    image_reader: easyocr.Reader,
 ) -> None:
     """Start gui mode"""
     try:
@@ -640,9 +727,7 @@ def run_gui(
 
         # Check if it is a Dark or Light theme
         dark_theme = 1 <= theme <= 4
-        app = Gui(
-            root, pipeline, language, voice, speed, device, image_reader, dark_theme
-        )
+        app = Gui(root, pipeline, language, voice, speed, device, dark_theme)
 
         def on_closing():
             if messagebox.askokcancel("Quit", "Do you want to quit?"):

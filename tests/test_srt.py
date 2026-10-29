@@ -65,3 +65,36 @@ def test_empty_file(tmp_path):
     srt.write_text("", encoding="utf-8")
 
     assert parse_srt_file(str(srt)) == []
+
+
+def test_utf8_bom_keeps_first_entry(tmp_path):
+    srt = tmp_path / "bom.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nfirst\n", encoding="utf-8-sig")
+
+    entries = parse_srt_file(str(srt))
+
+    assert [e.index for e in entries] == [1]
+
+
+def write_srt(tmp_path, content):
+    path = tmp_path / "sub.srt"
+    path.write_text(content, encoding="utf-8")
+    return str(path)
+
+
+def test_parse_dot_milliseconds_and_long_hours(tmp_path):
+    entries = parse_srt_file(
+        write_srt(tmp_path, "1\n100:00:01.500 --> 100:00:02.000\nHi\n")
+    )
+    assert entries == [SRTEntry(1, 360001.5, 360002.0, "Hi")]
+
+
+def test_skip_entry_ending_before_start(tmp_path):
+    entries = parse_srt_file(
+        write_srt(
+            tmp_path,
+            "1\n00:00:05,000 --> 00:00:01,000\nBad\n\n"
+            "2\n00:00:06,000 --> 00:00:07,000\nGood\n",
+        )
+    )
+    assert [entry.text for entry in entries] == ["Good"]

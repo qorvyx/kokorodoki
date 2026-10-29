@@ -1,3 +1,4 @@
+import platform
 import queue
 import sys
 import threading
@@ -21,6 +22,7 @@ from utils import (
     get_nltk_language,
     get_voices,
     parse_srt_file,
+    release_memory,
     split_text_to_sentences,
 )
 
@@ -52,16 +54,24 @@ class TTSPlayer:
         self.lock = threading.Lock()
         self.back_number = 0
         self.audio_player = None
+        self._threads: list[threading.Thread] = []
         self.ctrlc = not ctrlc
         self.print_complete = True
 
     def change_language(self, new_lang: str, device: str | None) -> bool:
         """Change the language and reinitialize the pipeline."""
+        if new_lang == self.language:
+            return True
         if new_lang in self.languages:
-            self.language = new_lang
+            # Load first, so a failed load keeps the current language.
+            # The loaded model is shared, only the G2P is new.
             self.pipeline = KPipeline(
-                lang_code=self.language, repo_id=REPO_ID, device=device
+                lang_code=new_lang,
+                repo_id=REPO_ID,
+                model=self.pipeline.model,
+                device=device,
             )
+            self.language = new_lang
             if not self.voice.startswith(new_lang):
                 self.change_voice(
                     next(voice for voice in get_voices() if voice.startswith(new_lang))
@@ -103,7 +113,7 @@ class TTSPlayer:
         """Generate audio chunks and put them in the queue."""
         try:
             sentences = [text] if isinstance(text, str) else text
-            for sentence in sentences:
+            for index, sentence in enumerate(sentences):
                 generator = self.pipeline(
                     sentence, voice=self.voice, speed=self.speed, split_pattern=None
                 )
@@ -122,15 +132,17 @@ class TTSPlayer:
                         # Trim silence for smooth reading
                         trimed_audio, _ = librosa.effects.trim(audio, top_db=60)
                         # trimed_audio = self.trim_silence(audio, threshold=0.001)
-                        self.audio_queue.put(trimed_audio)
+                        # Tag each chunk with its sentence so the GUI highlights
+                        # the right one when a sentence yields several chunks.
+                        self.audio_queue.put((index, trimed_audio))
 
             self.audio_queue.put(None)  # Signal end of generation
         except Exception as e:
             console.print(f"[bold red]Generation error:[/] {str(e)}")
             self.audio_queue.put(None)  # Ensure playback thread exits
 
-    def generate_audio_file(self, text: list | str, output_file="Output.wav") -> None:
-        """Generate audio file"""
+    def generate_audio_file(self, text: list | str, output_file="Output.wav") -> bool:
+        """Generate audio file, return True if it was saved"""
         try:
             with Progress(
                 SpinnerColumn("dots", style="yellow", speed=0.8),
@@ -151,10 +163,16 @@ class TTSPlayer:
                     )
 
                     for result in generator:
+                        if result.audio is None:
+                            continue
                         trimed_audio, _ = librosa.effects.trim(
                             result.audio.numpy(), top_db=70
                         )
                         audio_chunks.append(self.to_stereo(trimed_audio))
+
+                if not audio_chunks:
+                    console.print("[bold red]Error:[/] No audio was generated")
+                    return False
 
                 full_audio = np.concatenate(audio_chunks, axis=0)
                 sf.write(output_file, full_audio, SAMPLE_RATE, format="WAV")
@@ -165,21 +183,25 @@ class TTSPlayer:
                     total=1,
                     description=f"[bold green]Saved to {output_file}[/]",
                 )
+            return True
 
         except KeyboardInterrupt:
             console.print("\n[bold yellow]Exiting...[/]")
             sys.exit()
         except Exception as e:
             console.print(f"[bold red]Generation error:[/] {str(e)}")
+            return False
+        finally:
+            release_memory()
 
-    def generate_srt_timed_audio(self, srt_file: str, output_file="Output.wav") -> None:
-        """Generate timed audio based on SRT subtitle file"""
+    def generate_srt_timed_audio(self, srt_file: str, output_file="Output.wav") -> bool:
+        """Generate timed audio based on SRT subtitle file, return True if it was saved"""
         try:
             # Parse SRT file
             srt_entries = parse_srt_file(srt_file)
             if not srt_entries:
                 console.print("[bold red]Error:[/] No valid entries found in SRT file")
-                return
+                return False
 
             with Progress(
                 SpinnerColumn("dots", style="yellow", speed=0.8),
@@ -242,13 +264,14 @@ class TTSPlayer:
                             end_sample = len(full_audio)
                             entry_audio = entry_audio[: end_sample - start_sample]
 
-                        # Place audio at the correct timing
+                        # Place audio at the correct timing, mixing overlapping entries
                         if start_sample < len(full_audio):
-                            full_audio[start_sample:end_sample] = entry_audio
+                            full_audio[start_sample:end_sample] += entry_audio
 
                     progress.update(task, advance=1)
 
                 # Save the final audio
+                np.clip(full_audio, -1.0, 1.0, out=full_audio)
                 sf.write(output_file, full_audio, SAMPLE_RATE, format="WAV")
 
                 progress.update(
@@ -256,12 +279,16 @@ class TTSPlayer:
                     completed=len(srt_entries),
                     description=f"[bold green]Saved timed audio to {output_file}[/]",
                 )
+            return True
 
         except KeyboardInterrupt:
             console.print("\n[bold yellow]Exiting...[/]")
             sys.exit()
         except Exception as e:
             console.print(f"[bold red]SRT generation error:[/] {str(e)}")
+            return False
+        finally:
+            release_memory()
 
     def to_stereo(self, chunk):
         """Convert mono chunk to stereo"""
@@ -275,26 +302,35 @@ class TTSPlayer:
 
     def play_audio(self, gui_highlight=None) -> None:
         """Play audio chunks from the queue."""
+        if self.audio_player is None:
+            self.audio_player = AudioPlayer(SAMPLE_RATE)
+        self.audio_player.acquire()
         try:
-            if self.audio_player is None:
-                self.audio_player = AudioPlayer(SAMPLE_RATE)
             audio_chunks = []
             audio_size = 0
             self.back_number = 0
             self.print_complete = True
+            stopped = False
             while not self.stop_event.is_set():
                 self.skip.clear()
                 self.back.clear()
                 with self.lock:
                     back_number = self.back_number = min(self.back_number, audio_size)
                 if back_number > 0 and audio_size > 0:
-                    audio = audio_chunks[audio_size - back_number]
+                    sentence_index, audio = audio_chunks[audio_size - back_number]
                 else:
-                    audio = self.audio_queue.get()
-                    if audio is None:
+                    # A timeout re-checks stop_event, since a stop may have
+                    # cleared the end-of-generation marker from the queue
+                    try:
+                        item = self.audio_queue.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+                    self.audio_queue.task_done()
+                    if item is None:
                         break
 
-                    audio_chunks.append(audio)
+                    sentence_index, audio = item
+                    audio_chunks.append(item)
                     audio_size += 1
 
                 if self.verbose:
@@ -303,12 +339,13 @@ class TTSPlayer:
                 self.audio_player.play(audio)
                 if gui_highlight is not None:
                     gui_highlight.queue.put(
-                        (gui_highlight.highlight, (audio_size - (back_number or 1),))
+                        (gui_highlight.highlight, (sentence_index,))
                     )
                 while self.audio_player.is_playing:
                     if self.stop_event.is_set():
                         self.audio_player.stop()
-                        return
+                        stopped = True
+                        break
                     elif self.skip.is_set():
                         self.audio_player.stop()
                         break
@@ -316,28 +353,40 @@ class TTSPlayer:
                         self.audio_player.stop()
                         break
                     time.sleep(0.2)
+                if stopped:
+                    break
 
                 with self.lock:
                     if not self.back.is_set() and self.back_number > 0:
                         self.back_number -= 1
-                    if self.back_number == 0:
-                        self.audio_queue.task_done()
             if gui_highlight is not None:
                 gui_highlight.queue.put(gui_highlight.remove_highlight)
             self.audio_player.stop()
-            if self.print_complete is True:
+            if self.print_complete is True and not self.stop_event.is_set():
                 console.print("[green]Playback complete.[/]\n")
         except Exception as e:
-            console.print(f"[dim]Playback thread error: {e}[/dim]")
+            console.print(f"[bold red]Playback error:[/] {e}")
+            self.audio_player.stop()
         finally:
-            if self.audio_player is not None:
-                self.audio_player.schedule_close()
+            self.audio_player.release()
+
+    def is_active(self) -> bool:
+        """Whether generation or playback threads from the last speak() are alive."""
+        return any(thread.is_alive() for thread in self._threads)
+
+    def wait_until_idle(self, timeout: float) -> bool:
+        """Wait for the last speak()'s threads to finish; True if they did."""
+        deadline = time.monotonic() + timeout
+        for thread in self._threads:
+            thread.join(max(0.0, deadline - time.monotonic()))
+        return not self.is_active()
 
     def skip_sentence(self) -> None:
         self.skip.set()
 
     def back_sentence(self) -> None:
-        self.back_number += 1
+        with self.lock:
+            self.back_number += 1
         self.back.set()
 
     def stop_playback(self, printm=True) -> None:
@@ -352,16 +401,21 @@ class TTSPlayer:
 
     def pause_playback(self) -> None:
         """Pause playback."""
-        self.audio_player.pause()
+        if self.audio_player is not None:
+            self.audio_player.pause()
 
     def resume_playback(self) -> None:
         """Resume playback."""
-        self.audio_player.resume()
+        if self.audio_player is not None:
+            self.audio_player.resume()
 
     def speak(self, text: str | list, console_mode=True, gui_highlight=None) -> None:
         """Start TTS generation and playback in separate threads."""
 
         self.stop_event.clear()
+
+        # New text always starts unpaused
+        self.resume_playback()
 
         # Make sure the queue is empty
         with self.audio_queue.mutex:
@@ -373,6 +427,7 @@ class TTSPlayer:
         play_thread = threading.Thread(
             target=self.play_audio, args=(gui_highlight,), daemon=True
         )
+        self._threads = [gen_thread, play_thread]
 
         try:
             # Start generation thread
@@ -400,18 +455,37 @@ class TTSPlayer:
                 gen_thread.join()
                 play_thread.join()
                 sys.exit()
+        release_memory()
 
 
 # Seconds to keep the output device open after playback ends, so back-to-back
 # texts don't reopen it.
 IDLE_CLOSE_DELAY = 2.0
 
+# Terminating PortAudio on idle drops the JACK client that pipewire-jack keeps
+# alive. On Windows, PortAudio's WASAPI backend ties COM setup to the thread
+# that initialized it, so there only the stream is closed.
+TERMINATE_PORTAUDIO_ON_IDLE = platform.system() != "Windows"
+
+
+def _portaudio_initialize(sd) -> None:
+    """Initialize PortAudio again after _portaudio_terminate (sounddevice internals)."""
+    if hasattr(sd, "_initialized") and not sd._initialized:
+        sd._initialize()
+
+
+def _portaudio_terminate(sd) -> None:
+    """Shut PortAudio down; skipped if sounddevice's internals are unavailable."""
+    if getattr(sd, "_initialized", 0) and hasattr(sd, "_terminate"):
+        sd._terminate()
+
 
 class AudioPlayer:
     """Plays audio clips through a PortAudio stream that is only open while needed.
 
-    sounddevice is imported lazily and PortAudio is terminated once playback has
-    been idle for ``idle_delay`` seconds, so an idle daemon holds no audio device
+    sounddevice is imported lazily. Playback sessions (one per play_audio run)
+    are counted, and once none is left the stream is closed and PortAudio shut
+    down after ``idle_delay`` seconds, so an idle daemon holds no audio device
     (under pipewire-jack, an initialized PortAudio keeps a JACK client alive).
     """
 
@@ -423,11 +497,13 @@ class AudioPlayer:
         self.event = threading.Event()
         # Guards playback state; taken by the PortAudio callback.
         self.lock = threading.Lock()
-        # Serializes opening/closing the stream. Never hold self.lock while
-        # stopping the stream: stop() waits for the callback, which takes self.lock.
+        # Serializes opening/closing the stream and session bookkeeping. Never
+        # hold self.lock while stopping the stream: stop() waits for the
+        # callback, which takes self.lock.
         self.stream_lock = threading.Lock()
         self.current_audio = None
         self.stream = None
+        self._sessions = 0
         self._idle_timer = None
         self._idle_token = 0
 
@@ -437,15 +513,23 @@ class AudioPlayer:
             return
         import sounddevice as sd
 
-        if not sd._initialized:
-            sd._initialize()
-        self.stream = sd.OutputStream(
-            samplerate=self.samplerate,
-            channels=2,
-            callback=self._callback,
-            finished_callback=self._finished_callback,
-        )
-        self.stream.start()
+        _portaudio_initialize(sd)
+        stream = None
+        try:
+            stream = sd.OutputStream(
+                samplerate=self.samplerate,
+                channels=2,
+                callback=self._callback,
+                finished_callback=self._finished_callback,
+            )
+            stream.start()
+        except Exception:
+            if stream is not None:
+                stream.close()
+            if TERMINATE_PORTAUDIO_ON_IDLE:
+                _portaudio_terminate(sd)
+            raise
+        self.stream = stream
 
     def _close_stream(self) -> None:
         """Close the stream and shut PortAudio down (stream_lock held)."""
@@ -458,8 +542,8 @@ class AudioPlayer:
             stream.stop()
             stream.close()
         finally:
-            if sd._initialized:
-                sd._terminate()
+            if TERMINATE_PORTAUDIO_ON_IDLE:
+                _portaudio_terminate(sd)
 
     def _cancel_idle_close(self) -> None:
         """Invalidate any pending idle close (stream_lock held)."""
@@ -468,11 +552,18 @@ class AudioPlayer:
             self._idle_timer.cancel()
             self._idle_timer = None
 
-    def schedule_close(self) -> None:
-        """Release the audio device after idle_delay seconds unless playback resumes."""
+    def acquire(self) -> None:
+        """Start a playback session; the device stays open until it is released."""
         with self.stream_lock:
+            self._sessions += 1
             self._cancel_idle_close()
-            if self.stream is None:
+
+    def release(self) -> None:
+        """End a playback session; the last one schedules the idle close."""
+        with self.stream_lock:
+            self._sessions = max(0, self._sessions - 1)
+            self._cancel_idle_close()
+            if self._sessions or self.stream is None:
                 return
             token = self._idle_token
             self._idle_timer = threading.Timer(
@@ -483,12 +574,11 @@ class AudioPlayer:
 
     def _close_if_idle(self, token) -> None:
         with self.stream_lock:
-            if token != self._idle_token:
+            if token != self._idle_token or self._sessions:
                 return
             self._idle_timer = None
-            with self.lock:
-                if self.current_audio is not None:
-                    return
+            # No session is left to play what is loaded, so drop it.
+            self.stop()
             self._close_stream()
 
     def close(self) -> None:
@@ -534,13 +624,13 @@ class AudioPlayer:
         with self.stream_lock:
             self._cancel_idle_close()
             self._open_stream()
+            # self.playing is left as is, so a pause also holds the next clip
             with self.lock:
+                self.event.clear()
                 self.current_audio = audio
                 self.current_frame = 0
-                self.playing = True
 
         if blocking:
-            self.event.clear()
             self.event.wait()
 
     def resume(self) -> None:
@@ -556,7 +646,6 @@ class AudioPlayer:
     def stop(self) -> None:
         """Stop playback and clear current audio"""
         with self.lock:
-            self.playing = False
             self.current_frame = 0
             self.current_audio = None
             self.event.set()

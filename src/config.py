@@ -1,3 +1,5 @@
+import os
+
 from rich.console import Console
 
 SAMPLE_RATE = 24000  # Kokoro-82M sample rate
@@ -31,10 +33,16 @@ COMMANDS = [
     "!help",
     "!quit",
     "!ctrlc",
-    "!status",
 ]
-HOST = "0.0.0.0"
-PORT = 5561
+HOST = "127.0.0.1"
+# The daemon only listens locally; containers that publish the port set
+# KOKORODOKI_HOST=0.0.0.0.
+BIND_HOST = os.environ.get("KOKORODOKI_HOST", HOST)
+PORT = 5600
+# MB above which an idle CPU daemon restarts itself (0 disables)
+DEFAULT_MAX_MEMORY = 3000
+# Seconds the daemon waits for a client to send before dropping it.
+CLIENT_TIMEOUT = 5
 TITLE = "KokoroDoki"
 WINDOW_SIZE = "700x600"
 VERSION = "v0.1.0"

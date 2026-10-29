@@ -155,12 +155,12 @@ Follow the official guide to install the [CUDA Toolkit](https://developer.nvidia
 Run directly with uv (no cloning required):
 
 ```bash
-uv tool install -p python3.12 https://github.com/eel-brah/kokorodoki/archive/refs/heads/master.zip
+uv tool install -p python3.12 https://github.com/qorvyx/kokorodoki/archive/refs/heads/master.zip
 ```
 
 For japanese and Chinese support:
 ```bash
-uv tool install -p python3.12 "https://github.com/eel-brah/kokorodoki/archive/refs/heads/master.zip[japanese,chinese]"
+uv tool install -p python3.12 "https://github.com/qorvyx/kokorodoki/archive/refs/heads/master.zip[japanese,chinese]"
 ```
 
 To remove it:
@@ -171,7 +171,7 @@ uv tool uninstall kokorodoki
 ##### Manual install
 
 ```bash
-git clone https://github.com/eel-brah/kokorodoki
+git clone https://github.com/qorvyx/kokorodoki
 cd kokorodoki
 
 # Create environment + install dependencies
@@ -306,7 +306,9 @@ kokorodoki -f subtitles.srt -o timed_audio.wav
 #### Other Options
 
 * `--device` Set the computation device (`cuda` or `cpu`).
-* `--port` Set the port for daemon mode (default: `5561`).
+* `--port` Set the port for daemon mode (default: `5600`).
+  The default sits outside 5555–5585 on purpose: the Android `adb` server scans those odd ports for emulators and would hold the daemon's connection open.
+* `--max-memory` Daemon only: restart when idle and above this many MB, with the same settings (default: `3000` on CPU, `0` on GPU; `0` disables). Linux only.
 * `--theme` Set GUI theme (default: `darkly`).
 * `--history-off` Disable saving command history.
 * `--verbose`, `-V` Enable verbose output.
@@ -415,7 +417,7 @@ doki --resume
 --next                  Skip a sentence
 --back                  Go back one sentence
 --status                Get current settings
---exit                  Stop reading
+--exit                  Stop reading and shut the daemon down
 
 # Change settings
 --language, -l          Change language ('a' for American English)

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from config import (
     DEFAULT_LANGUAGE,
+    DEFAULT_MAX_MEMORY,
     DEFAULT_SPEED,
     DEFAULT_THEME,
     DEFAULT_VOICE,
@@ -16,6 +17,7 @@ from utils import (
     display_languages,
     display_themes,
     display_voices,
+    get_default_voice,
     get_gui_themes,
     get_language_map,
     get_voices,
@@ -36,6 +38,7 @@ class Args:
     setup: bool
     daemon: bool
     port: int
+    max_memory: int | None
     gui: bool
     theme: int
     verbose: bool
@@ -82,8 +85,8 @@ def parse_args() -> Args:
         "--voice",
         "-v",
         type=str,
-        default=DEFAULT_VOICE,
-        help=f"Initial voice (default: '{DEFAULT_VOICE}')",
+        default=None,
+        help=f"Initial voice (default: '{DEFAULT_VOICE}', or the first voice of --language)",
     )
     parser.add_argument(
         "--speed",
@@ -164,6 +167,16 @@ def parse_args() -> Args:
         "--port", type=int, default=PORT, help=f"Choose a port number (default: {PORT})"
     )
     parser.add_argument(
+        "--max-memory",
+        "--max_memory",
+        type=int,
+        default=None,
+        help=(
+            "Daemon only: restart when idle and above this many MB, 0 disables "
+            f"(default: {DEFAULT_MAX_MEMORY} on CPU, 0 on GPU)"
+        ),
+    )
+    parser.add_argument(
         "--gui",
         "-g",
         action="store_true",
@@ -199,7 +212,7 @@ def parse_args() -> Args:
         console.print(
             "[bold red]Error:[/] Only one mode (Console, GUI, Daemon, or CLI) can be selected."
         )
-        sys.exit(0)
+        sys.exit(1)
     if args.theme != DEFAULT_THEME and not args.gui:
         console.print(
             "[bold yellow]Warning:[/] Invalid use of --theme without --gui or -g"
@@ -210,6 +223,10 @@ def parse_args() -> Args:
         )
     if args.port != PORT and not args.daemon:
         console.print("[bold yellow]Warning:[/] Invalid use of --port without --daemon")
+    if args.max_memory is not None and not args.daemon:
+        console.print(
+            "[bold yellow]Warning:[/] Invalid use of --max-memory without --daemon"
+        )
 
     # Validate inputs
     languages = get_language_map()
@@ -219,6 +236,10 @@ def parse_args() -> Args:
         console.print(f"[bold red]Error:[/] Invalid language '{args.language}'")
         display_languages()
         sys.exit(1)
+
+    # Without --voice, use a voice made for the chosen language
+    if args.voice is None:
+        args.voice = get_default_voice(args.language, DEFAULT_VOICE)
 
     if args.voice not in voices:
         console.print(f"[bold red]Error:[/] Invalid voice '{args.voice}'")
@@ -240,6 +261,10 @@ def parse_args() -> Args:
     if args.theme not in get_gui_themes():
         console.print("[bold red]Error:[/] Invalid theme")
         display_themes()
+        sys.exit(1)
+
+    if args.max_memory is not None and args.max_memory < 0:
+        console.print("[bold red]Error:[/] --max-memory can't be negative")
         sys.exit(1)
 
     if not 0 <= args.port <= 65535:
@@ -315,6 +340,7 @@ def parse_args() -> Args:
         args.setup,
         args.daemon,
         args.port,
+        args.max_memory,
         args.gui,
         args.theme,
         args.verbose,

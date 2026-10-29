@@ -1,6 +1,10 @@
+import ctypes
+import gc
 import os
 import platform
 import re
+import socket
+import threading
 from dataclasses import dataclass
 
 if platform.system() == "Windows":
@@ -13,6 +17,36 @@ from rich import box
 from rich.table import Table
 
 from config import COMMANDS, HISTORY_FILE, HISTORY_LIMIT, console
+
+
+def read_client_message(conn: socket.socket, timeout: float) -> bytes | None:
+    """Read one daemon message until the client closes; None if it goes silent"""
+    conn.settimeout(timeout)
+    chunks = []
+    try:
+        while chunk := conn.recv(4096):
+            chunks.append(chunk)
+    except TimeoutError:
+        return None
+    return b"".join(chunks)
+
+
+def is_client_message(data: bytes) -> bool:
+    """Whether data looks like a client payload: TEXT:, IMAGE: or plain text"""
+    if data.startswith((b"TEXT:", b"IMAGE:")):
+        return True
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return bool(text.strip()) and all(c.isprintable() or c.isspace() for c in text)
+
+
+def is_command_message(data: bytes) -> bool:
+    """Whether data is a bare !command; TEXT:/IMAGE: payloads are always read aloud"""
+    if data.startswith((b"TEXT:", b"IMAGE:")):
+        return False
+    return data.decode(errors="replace").startswith("!")
 
 
 def get_language_map() -> dict[str, str]:
@@ -43,6 +77,106 @@ def get_easyocr_language_map() -> dict[str, str]:
         "j": "ja",
         "z": "ch_sim",
     }
+
+
+def get_easyocr_languages(language_code: str) -> list[str]:
+    """Return the EasyOCR languages for a language code"""
+    lang = get_easyocr_language_map().get(language_code)
+    return [lang] if lang else []
+
+
+def ocr_needs_load(loaded: list[str] | None, wanted: list[str]) -> bool:
+    """Whether the OCR reader must be (re)built for the wanted languages"""
+    return loaded != wanted
+
+
+class OcrReader:
+    """EasyOCR reader loaded on first use, rebuilt only when its languages change"""
+
+    def __init__(self, language_code: str):
+        self.languages = get_easyocr_languages(language_code)
+        self._loaded: list[str] | None = None
+        self._reader = None
+        self._lock = threading.Lock()
+
+    def set_language(self, language_code: str) -> None:
+        """Use a new language, loaded on the next read"""
+        with self._lock:
+            self.languages = get_easyocr_languages(language_code)
+
+    def load(self):
+        """Load the reader if needed and return it"""
+        with self._lock:
+            if ocr_needs_load(self._loaded, self.languages):
+                import easyocr
+
+                # Drop the old reader first, so two are never held at once
+                self._reader = self._loaded = None
+                self._reader = easyocr.Reader(self.languages)
+                self._loaded = self.languages
+            return self._reader
+
+    def readtext(self, image) -> list:
+        """Read text from an image path or bytes"""
+        return self.load().readtext(image)
+
+
+def parse_rss_mb(status: str) -> float | None:
+    """Return VmRSS in MB from a /proc/<pid>/status text"""
+    for line in status.splitlines():
+        if line.startswith("VmRSS:"):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                return int(parts[1]) / 1024
+    return None
+
+
+def get_rss_mb() -> float | None:
+    """Return this process's resident memory in MB, None if unknown"""
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            return parse_rss_mb(f.read())
+    except OSError:
+        return None
+
+
+def over_memory_limit(rss_mb: float | None, limit_mb: int) -> bool:
+    """Whether rss is known and above a limit; a limit of 0 disables it"""
+    return limit_mb > 0 and rss_mb is not None and rss_mb > limit_mb
+
+
+def restart_argv(argv: list[str], language: str, voice: str, speed: float) -> list[str]:
+    """Return argv with the current language, voice and speed, for a restart"""
+    options = {"--language", "-l", "--voice", "-v", "--speed", "-s"}
+    kept = []
+    skip_value = False
+    for arg in argv:
+        if skip_value:
+            skip_value = False
+        elif arg in options:
+            skip_value = True
+        elif arg.split("=", 1)[0] not in options:
+            kept.append(arg)
+    return [*kept, "--language", language, "--voice", voice, "--speed", str(speed)]
+
+
+_malloc_trim = None
+
+
+def release_memory() -> None:
+    """Give freed memory back to the OS (glibc only, no-op elsewhere)"""
+    global _malloc_trim
+    gc.collect()
+    if platform.system() != "Linux":
+        return
+    if _malloc_trim is None:
+        try:
+            _malloc_trim = ctypes.CDLL("libc.so.6").malloc_trim
+        except (OSError, AttributeError):
+            # Not glibc (e.g. musl)
+            _malloc_trim = False
+    if _malloc_trim:
+        _malloc_trim(0)
 
 
 def get_voices() -> list[str]:
@@ -103,6 +237,13 @@ def get_voices() -> list[str]:
         "zm_yunxia",
         "zm_yunyang",
     ]
+
+
+def get_default_voice(language: str, default: str) -> str:
+    """Return default if it suits the language, else the language's first voice"""
+    if default.startswith(language):
+        return default
+    return next(voice for voice in get_voices() if voice.startswith(language))
 
 
 def get_gui_themes() -> dict[int, str]:
@@ -383,12 +524,11 @@ def split_long_sentence(sentence: str, max_len=350, min_len=50) -> list[str]:
     if len(chunk) <= max_len:
         chunks.append(chunk)
     else:
-        # Split by "[,;]\s"
-        split_points = [m.start() for m in re.finditer(r"[,;]\s", chunk)]
+        # Split after "[,;]\s" or a CJK comma
+        split_points = [m.end() for m in re.finditer(r"[,;]\s|[、，；]", chunk)]
         if split_points:
             last_pos = 0
-            for pos in split_points:
-                next_pos = pos + 2
+            for next_pos in split_points:
                 segment = chunk[last_pos:next_pos]
                 if len(segment) > max_len:
                     # For too long segments
@@ -432,14 +572,30 @@ def merge_short_sentences(sentences: list[str], min_len=50, max_len=300) -> list
     return result
 
 
+# Sentence ends that nltk's punkt models don't know (Japanese, Mandarin, Hindi).
+NON_LATIN_SENTENCE_END = re.compile(r"(?<=[。！？।॥])")
+
+# Max sentence length in characters. Text without spaces (Japanese, Mandarin)
+# packs several phonemes into each character, and Kokoro drops whatever goes
+# past 510 phonemes, so it gets a smaller limit.
+MAX_SENTENCE_LEN = 350
+MAX_SENTENCE_LEN_NO_SPACES = 100
+
+
 def split_text_to_sentences(text: str, language: str) -> list[str]:
     """Tokenize text into sentences"""
-    sentences = sent_tokenize(text, language=language)
+    sentences = [
+        part.strip()
+        for sentence in sent_tokenize(text, language=language)
+        for part in NON_LATIN_SENTENCE_END.split(sentence)
+        if part.strip()
+    ]
 
     new_sentences = []
     for sentence in sentences:
-        if len(sentence) > 350:
-            new_sentences.extend(split_long_sentence(sentence, max_len=350))
+        max_len = MAX_SENTENCE_LEN if " " in sentence else MAX_SENTENCE_LEN_NO_SPACES
+        if len(sentence) > max_len:
+            new_sentences.extend(split_long_sentence(sentence, max_len=max_len))
         else:
             new_sentences.extend([sentence])
 
@@ -473,7 +629,7 @@ def parse_srt_file(file_path: str) -> list[SRTEntry]:
     """Parse an SRT subtitle file and return a list of SRTEntry objects"""
     entries = []
 
-    with open(file_path, encoding="utf-8") as f:
+    with open(file_path, encoding="utf-8-sig") as f:
         content = f.read().strip()
 
     # Split by double newlines to separate entries
@@ -491,7 +647,7 @@ def parse_srt_file(file_path: str) -> list[SRTEntry]:
             # Parse timestamp line
             timestamp_line = lines[1]
             timestamp_match = re.match(
-                r"(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})",
+                r"(\d+:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d+:\d{2}:\d{2}[,.]\d{3})",
                 timestamp_line,
             )
             if not timestamp_match:
@@ -499,6 +655,11 @@ def parse_srt_file(file_path: str) -> list[SRTEntry]:
 
             start_time = parse_srt_timestamp(timestamp_match.group(1))
             end_time = parse_srt_timestamp(timestamp_match.group(2))
+            if end_time < start_time:
+                console.print(
+                    f"[yellow]Skipping SRT entry {index}: it ends before it starts[/]"
+                )
+                continue
 
             # Join text lines (in case subtitle spans multiple lines)
             text = "\n".join(lines[2:]).strip()

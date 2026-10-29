@@ -274,7 +274,7 @@ def parse_args() -> tuple[Action, float | None, str | None, str | None, bool, bo
     input_group.add_argument(
         "--exit",
         action="store_true",
-        help="Stop reading",
+        help="Stop reading and shut the daemon down",
     )
 
     args = parser.parse_args()
@@ -351,7 +351,13 @@ def send(
 
 def main():
     """Main entry point."""
-    send(*parse_args())
+    args = parse_args()
+    try:
+        send(*args)
+    except ConnectionRefusedError:
+        print(f"Error: No kokorodoki daemon is listening on {HOST}:{PORT}.")
+        print("Start it with: kokorodoki --daemon")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

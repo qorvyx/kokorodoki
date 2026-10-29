@@ -51,18 +51,18 @@ Install Kokorodoki globally:
 
 Without CUDA (CPU only):
 ```bash
-uv tool install -p python3.12 "https://github.com/eel-brah/kokorodoki/archive/refs/heads/master.zip[windows]"
+uv tool install -p python3.12 "https://github.com/qorvyx/kokorodoki/archive/refs/heads/master.zip[windows]"
 ```
 
 With CUDA support:
 ```bash
-uv tool install -p python3.12 "https://github.com/eel-brah/kokorodoki/archive/refs/heads/master.zip[windows-torch]"
+uv tool install -p python3.12 "https://github.com/qorvyx/kokorodoki/archive/refs/heads/master.zip[windows-torch]"
 ```
 
 #### With Japanese and Chinese support:
 
 ```bash
-uv tool install -p python3.12 "https://github.com/eel-brah/kokorodoki/archive/refs/heads/master.zip[windows,japanese,chinese]"
+uv tool install -p python3.12 "https://github.com/qorvyx/kokorodoki/archive/refs/heads/master.zip[windows,japanese,chinese]"
 ```
 
 ---
@@ -70,7 +70,7 @@ uv tool install -p python3.12 "https://github.com/eel-brah/kokorodoki/archive/re
 ### Option 2 — Manual install
 
 ```bash
-git clone https://github.com/eel-brah/kokorodoki
+git clone https://github.com/qorvyx/kokorodoki
 cd kokorodoki
 
 # CPU install
